@@ -39,21 +39,24 @@ rob_valid = pyrtl.MemBlock(bitwidth=1, addrwidth=4, name="rob_valid", max_write_
 rob_pending = pyrtl.MemBlock(bitwidth=1, addrwidth=4, name="rob_pending", max_write_ports=2)
 rob_preg = pyrtl.MemBlock(bitwidth=5, addrwidth=4, name="rob_preg")
 
-commit_pointer = pyrtl.Register(bitwidth=4, name="rob_head")
-alloc_pointer = pyrtl.Register(bitwidth=4, name="rob_tail")
+commit_pointer = pyrtl.Register(bitwidth=4, name="commit_pointer")
+alloc_pointer = pyrtl.Register(bitwidth=4, name="alloc_pointer")
+
+alloc_ready = pyrtl.WireVector(bitwidth=1, name='alloc_ready')
+commit_ready = pyrtl.WireVector(bitwidth=1, name='commit_ready')
 
 # allocate
 not_valid_alloc = ~rob_valid[alloc_pointer]
-alloc_ready = not_valid_alloc & rob_alloc_req_val_i
+alloc_ready <<= not_valid_alloc & rob_alloc_req_val_i
 rob_alloc_req_rdy_o <<= not_valid_alloc
 rob_alloc_resp_slot_o <<= alloc_pointer
 
 with pyrtl.conditional_assignment:
-    with alloc_ready:
+    with alloc_ready == 1:
         rob_valid[alloc_pointer] |= 1
         rob_pending[alloc_pointer] |= 1
         rob_preg[alloc_pointer] <<= rob_alloc_req_preg_i
-        alloc_pointer.next <<= alloc_pointer + 1
+        alloc_pointer.next |= alloc_pointer + 1 
 
 # writeback
 with pyrtl.conditional_assignment:
@@ -61,15 +64,15 @@ with pyrtl.conditional_assignment:
         rob_pending[rob_fill_slot_i] |= 0
 
 # commit
-commit_ready = rob_valid[commit_pointer] & ~rob_pending[commit_pointer] & ~rob_fill_val_i
+commit_ready <<= rob_valid[commit_pointer] & ~rob_pending[commit_pointer]
 rob_commit_wen_o <<= commit_ready
 rob_commit_slot_o <<= commit_pointer
 rob_commit_rf_waddr_o <<= rob_preg[commit_pointer]
 
 with pyrtl.conditional_assignment:
-    with commit_ready:
+    with commit_ready == 1:
         rob_valid[commit_pointer] |= 0
-        commit_pointer.next <<= commit_pointer + 1
+        commit_pointer.next |= commit_pointer + 1
 
 
 ### Testing and Simulation ###
@@ -86,6 +89,8 @@ def TestOneInstructionFullFlow():
         })
     assert(sim.inspect("rob_alloc_req_rdy_o") == 1)
     assignedSlot = sim.inspect("rob_alloc_resp_slot_o")
+    # print("Step 1, commit ready: ", sim_trace.trace["commit_ready"][-1])
+    # print("Step 1, commit pointer: ", sim_trace.trace["commit_pointer_debug"][-1])
     # Then, writeback that slot (could be many cycles later but in this example just one)
     sim.step({
             rob_alloc_req_val_i: 0,
@@ -95,6 +100,8 @@ def TestOneInstructionFullFlow():
         })
     # We don't commit in the same cycle as writeback happens
     assert(sim.inspect("rob_commit_wen_o") == 0)
+    # print("Step 2, commit ready: ", sim_trace.trace["commit_ready"][-1])
+    # print("Step 2, commit pointer: ", sim_trace.trace["commit_pointer_debug"][-1])
     sim.step({
             rob_alloc_req_val_i: 0,
             rob_alloc_req_preg_i: 0,
@@ -102,6 +109,9 @@ def TestOneInstructionFullFlow():
             rob_fill_slot_i: 0,
         })
     # ...commit in the next cycle
+    # sim_trace.render_trace(symbol_len=20)
+    # print("Step 3, commit ready: ", sim_trace.trace["commit_ready"][-1])
+    # print("Step 3, commit pointer: ", sim_trace.trace["commit_pointer_debug"][-1])
     assert(sim.inspect("rob_commit_wen_o") == 1)
     assert(sim.inspect("rob_commit_slot_o") == assignedSlot)
     assert(sim.inspect("rob_commit_rf_waddr_o") == preg)
