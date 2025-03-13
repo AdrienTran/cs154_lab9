@@ -39,7 +39,37 @@ rob_valid = pyrtl.MemBlock(bitwidth=1, addrwidth=4, name="rob_valid", max_write_
 rob_pending = pyrtl.MemBlock(bitwidth=1, addrwidth=4, name="rob_pending", max_write_ports=2)
 rob_preg = pyrtl.MemBlock(bitwidth=5, addrwidth=4, name="rob_preg")
 
+commit_pointer = pyrtl.Register(bitwidth=4, name="rob_head")
+alloc_pointer = pyrtl.Register(bitwidth=4, name="rob_tail")
 
+# allocate
+not_valid_alloc = ~rob_valid[alloc_pointer]
+alloc_ready = not_valid_alloc & rob_alloc_req_val_i
+rob_alloc_req_rdy_o <<= not_valid_alloc
+rob_alloc_resp_slot_o <<= alloc_pointer
+
+with pyrtl.conditional_assignment:
+    with alloc_ready:
+        rob_valid[alloc_pointer] |= 1
+        rob_pending[alloc_pointer] |= 1
+        rob_preg[alloc_pointer] <<= rob_alloc_req_preg_i
+        alloc_pointer.next <<= alloc_pointer + 1
+
+# writeback
+with pyrtl.conditional_assignment:
+    with rob_fill_val_i:
+        rob_pending[rob_fill_slot_i] |= 0
+
+# commit
+commit_ready = rob_valid[commit_pointer] & ~rob_pending[commit_pointer] & ~rob_fill_val_i
+rob_commit_wen_o <<= commit_ready
+rob_commit_slot_o <<= commit_pointer
+rob_commit_rf_waddr_o <<= rob_preg[commit_pointer]
+
+with pyrtl.conditional_assignment:
+    with commit_ready:
+        rob_valid[commit_pointer] |= 0
+        commit_pointer.next <<= commit_pointer + 1
 
 
 ### Testing and Simulation ###
@@ -88,6 +118,7 @@ def TestOneInstructionFullFlow():
     assert(sim.inspect("rob_commit_wen_o") == 0)
     # ...and ROB stays ready
     assert(sim.inspect("rob_alloc_req_rdy_o") == 1)
+    
 
 # Uncomment to run the Sample Test
 # You may want to recomment before submitting as it could interfere with the autograder
